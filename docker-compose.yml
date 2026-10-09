@@ -1,0 +1,15 @@
+# Optional: local Postgres for development.  Run: docker compose up -d
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relaydesk
+    ports:
+      - '5432:5432'
+    volumes:
+      - relaydesk-data:/var/lib/postgresql/data
+volumes:
+  relaydesk-data:
