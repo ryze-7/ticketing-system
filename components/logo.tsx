@@ -53,7 +53,6 @@ export function LogoFull({ className }: { className?: string }) {
         letterSpacing="4"
         fontFamily="'Times New Roman', Times, serif"
         fill="#333333"
-        fontWeight={300}
       >
         LOGISTICS
       </text>
