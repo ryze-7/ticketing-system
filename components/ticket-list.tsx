@@ -96,7 +96,7 @@ export async function TicketList({
         </table>
         {tickets.length === 0 && (
           <div className="px-6 py-14 text-center text-sm text-slate-500">
-            {filtered ? 'No tickets match your filters.' : 'No tickets yet. Use “New request” to create one.'}
+            {filtered ? 'No tickets match your filters.' : 'No tickets yet. Use “New ticket” to create one.'}
           </div>
         )}
       </div>

@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'RelayDesk — IT support, without the back-and-forth',
+  title: 'INDOLOG — IT support',
   description: 'A calm, organized ticketing workspace for logistics teams and the people who support them.',
   generator: 'v0.app',
   icons: {

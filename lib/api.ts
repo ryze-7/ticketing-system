@@ -5,7 +5,13 @@ import { HttpError } from '@/lib/mutations'
 
 export async function requireUser() {
   const user = await getCurrentUser()
-  if (!user) throw new HttpError(401, 'No user found. Run `pnpm db:seed` to create demo users.')
+  if (!user) throw new HttpError(401, 'Please sign in.')
+  return user
+}
+
+export async function requireAdmin() {
+  const user = await requireUser()
+  if (user.role !== 'admin') throw new HttpError(403, 'Only admins can do this.')
   return user
 }
 

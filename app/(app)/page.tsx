@@ -8,7 +8,7 @@ import { formatDuration } from '@/lib/time'
 
 export default async function OverviewPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const user = await getCurrentUser()
-  if (!user) redirect('/')
+  if (!user) redirect('/login')
   const [params, stats] = await Promise.all([searchParams, getStats(user)])
   const agent = isAgentRole(user.role)
 

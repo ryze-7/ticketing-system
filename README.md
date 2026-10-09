@@ -1,37 +1,46 @@
 # RelayDesk
 
-Ticketing system: Next.js 16 + Postgres (Drizzle ORM). Employees raise tickets; agents/admins triage, assign and reply.
+Ticketing system: Next.js 16 + Postgres (Drizzle ORM). Employees raise tickets; agents and admins triage, assign and reply.
 
 ## Run locally
 
 ```bash
 pnpm install
-docker compose up -d            # local Postgres (or use a Neon/Supabase URL instead)
-cp .env.example .env.local      # set DATABASE_URL
-pnpm db:push                    # create tables
-pnpm db:seed                    # demo users + tickets (pnpm db:reset wipes and reseeds)
+cp .env.example .env.local      # then put your real DATABASE_URL in .env.local
+pnpm db:push                    # create / update tables
 pnpm dev
 ```
 
-Use **"Demo: switch user"** in the sidebar to act as an employee, agent or admin.
+Open http://localhost:3000. **The first account you create becomes the admin.**
+
+## Accounts
+
+- Anyone can sign up at `/signup` (they start as an *employee*). Set `ALLOW_SIGNUP=false` to close public sign-up.
+- Admins can add people with a temporary password, change roles, and reset passwords from the **People** page.
+- Passwords are hashed with scrypt; sessions are random tokens stored hashed in the database (30 days, httpOnly cookie).
+
+| Role | Can do |
+| --- | --- |
+| employee | Create tickets, see and reply to their own tickets |
+| agent | See all tickets, change status/priority/team/assignee, reply, view People |
+| admin | Everything above, plus add people, change roles, reset passwords |
+
+## Start fresh (remove all users and tickets)
+
+```bash
+pnpm db:wipe          # shows which database it would wipe
+pnpm db:wipe --yes    # actually wipes it
+```
 
 ## Deploy to Vercel
 
-1. Create a Postgres database: Vercel dashboard → Storage → Neon (it sets `DATABASE_URL` for you), or paste a Supabase **pooled** connection string.
-2. Push the schema to that database once, from your machine:
-   `DATABASE_URL="<prod url>" pnpm db:push` (add `pnpm db:seed` if you want demo data).
-3. Deploy / redeploy. Make sure `DATABASE_URL` is set for Production.
+1. Create a Postgres database (Vercel → Storage → Neon, or a Supabase pooled URL). Make sure `DATABASE_URL` is set for Production.
+2. Create the tables once from your machine: `DATABASE_URL="<prod url>" pnpm db:push`.
+3. Deploy, open the site, and sign up. That first account is your admin. Then consider setting `ALLOW_SIGNUP=false`.
 
-## How it works
+## Layout
 
-- `lib/db/schema.ts` – users, tickets, comments. Ticket ids start at 1001 (shown as REQ-1001).
-- `lib/queries.ts` / `lib/mutations.ts` – all reads/writes and the permission rules
-  (employees only see their own tickets; only agents/admins can edit status, priority, team, assignee).
-- `app/api/*` – REST endpoints used by the UI (`/api/tickets`, `/api/tickets/:id`, `/api/tickets/:id/comments`).
-- `app/(app)/*` – pages: overview, all tickets, my requests, ticket detail, people.
-
-## Important: auth is a demo
-
-`lib/session.ts` trusts a cookie, so **anyone can switch to the admin user**. That is fine for a demo, but do not put real
-data behind it. Replace `getCurrentUser()` (and delete `app/api/session`) with a real provider (Auth.js, Clerk, Supabase Auth);
-nothing else needs to change.
+- `lib/db/schema.ts`: users, credentials (password hashes, kept separate on purpose), sessions, tickets, comments
+- `lib/session.ts`: sessions and `getCurrentUser()`; `lib/users.ts`: sign-up and admin user management
+- `lib/queries.ts` / `lib/mutations.ts`: reads, writes and ticket permission rules
+- `app/api/*`: REST endpoints (`/api/auth/*`, `/api/users`, `/api/tickets`); `app/(app)/*`: signed-in pages; `app/(auth)/*`: login and sign-up

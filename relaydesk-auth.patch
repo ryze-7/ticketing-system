@@ -1,0 +1,1174 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..0d9cdc3
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,8 @@
++# Postgres connection string (never commit the real one: put it in .env.local).
++# Local (docker compose up -d):  postgres://relay:relay@localhost:5432/relaydesk
++# Neon / Supabase: paste the pooled connection string from their dashboard.
++DATABASE_URL=postgres://relay:relay@localhost:5432/relaydesk
++
++# Optional. Set to "false" to close public sign-up once your team has accounts.
++# (The very first account can always sign up and becomes the admin.)
++# ALLOW_SIGNUP=false
+diff --git a/.gitignore b/.gitignore
+index 97eb8c0..ba9e43d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -12,4 +12,6 @@ __v0_jsx-dev-runtime.ts
+ # Common ignores
+ node_modules
+ .next/
+-.DS_Store
+\ No newline at end of file
++.DS_Store
++*.tsbuildinfo
++next-env.d.ts
+diff --git a/README.md b/README.md
+index 9f4b18f..c57cb0f 100644
+--- a/README.md
++++ b/README.md
+@@ -1,37 +1,46 @@
+ # RelayDesk
+ 
+-Ticketing system: Next.js 16 + Postgres (Drizzle ORM). Employees raise tickets; agents/admins triage, assign and reply.
++Ticketing system: Next.js 16 + Postgres (Drizzle ORM). Employees raise tickets; agents and admins triage, assign and reply.
+ 
+ ## Run locally
+ 
+ ```bash
+ pnpm install
+-docker compose up -d            # local Postgres (or use a Neon/Supabase URL instead)
+-cp .env.example .env.local      # set DATABASE_URL
+-pnpm db:push                    # create tables
+-pnpm db:seed                    # demo users + tickets (pnpm db:reset wipes and reseeds)
++cp .env.example .env.local      # then put your real DATABASE_URL in .env.local
++pnpm db:push                    # create / update tables
+ pnpm dev
+ ```
+ 
+-Use **"Demo: switch user"** in the sidebar to act as an employee, agent or admin.
++Open http://localhost:3000. **The first account you create becomes the admin.**
+ 
+-## Deploy to Vercel
++## Accounts
++
++- Anyone can sign up at `/signup` (they start as an *employee*). Set `ALLOW_SIGNUP=false` to close public sign-up.
++- Admins can add people with a temporary password, change roles, and reset passwords from the **People** page.
++- Passwords are hashed with scrypt; sessions are random tokens stored hashed in the database (30 days, httpOnly cookie).
+ 
+-1. Create a Postgres database: Vercel dashboard → Storage → Neon (it sets `DATABASE_URL` for you), or paste a Supabase **pooled** connection string.
+-2. Push the schema to that database once, from your machine:
+-   `DATABASE_URL="<prod url>" pnpm db:push` (add `pnpm db:seed` if you want demo data).
+-3. Deploy / redeploy. Make sure `DATABASE_URL` is set for Production.
++| Role | Can do |
++| --- | --- |
++| employee | Create tickets, see and reply to their own tickets |
++| agent | See all tickets, change status/priority/team/assignee, reply, view People |
++| admin | Everything above, plus add people, change roles, reset passwords |
+ 
+-## How it works
++## Start fresh (remove all users and tickets)
++
++```bash
++pnpm db:wipe          # shows which database it would wipe
++pnpm db:wipe --yes    # actually wipes it
++```
++
++## Deploy to Vercel
+ 
+-- `lib/db/schema.ts` – users, tickets, comments. Ticket ids start at 1001 (shown as REQ-1001).
+-- `lib/queries.ts` / `lib/mutations.ts` – all reads/writes and the permission rules
+-  (employees only see their own tickets; only agents/admins can edit status, priority, team, assignee).
+-- `app/api/*` – REST endpoints used by the UI (`/api/tickets`, `/api/tickets/:id`, `/api/tickets/:id/comments`).
+-- `app/(app)/*` – pages: overview, all tickets, my requests, ticket detail, people.
++1. Create a Postgres database (Vercel → Storage → Neon, or a Supabase pooled URL). Make sure `DATABASE_URL` is set for Production.
++2. Create the tables once from your machine: `DATABASE_URL="<prod url>" pnpm db:push`.
++3. Deploy, open the site, and sign up. That first account is your admin. Then consider setting `ALLOW_SIGNUP=false`.
+ 
+-## Important: auth is a demo
++## Layout
+ 
+-`lib/session.ts` trusts a cookie, so **anyone can switch to the admin user**. That is fine for a demo, but do not put real
+-data behind it. Replace `getCurrentUser()` (and delete `app/api/session`) with a real provider (Auth.js, Clerk, Supabase Auth);
+-nothing else needs to change.
++- `lib/db/schema.ts`: users, credentials (password hashes, kept separate on purpose), sessions, tickets, comments
++- `lib/session.ts`: sessions and `getCurrentUser()`; `lib/users.ts`: sign-up and admin user management
++- `lib/queries.ts` / `lib/mutations.ts`: reads, writes and ticket permission rules
++- `app/api/*`: REST endpoints (`/api/auth/*`, `/api/users`, `/api/tickets`); `app/(app)/*`: signed-in pages; `app/(auth)/*`: login and sign-up
+diff --git a/app/(app)/layout.tsx b/app/(app)/layout.tsx
+index 352c949..21baf9e 100644
+--- a/app/(app)/layout.tsx
++++ b/app/(app)/layout.tsx
+@@ -1,4 +1,4 @@
+-import { asc } from 'drizzle-orm'
++import { redirect } from 'next/navigation'
+ import { AppShell } from '@/components/app-shell'
+ import { db, schema } from '@/lib/db'
+ import { visibilityFilter } from '@/lib/queries'
+@@ -6,28 +6,12 @@ import { getCurrentUser } from '@/lib/session'
+ 
+ export default async function AppLayout({ children }: { children: React.ReactNode }) {
+   const user = await getCurrentUser()
++  if (!user) redirect('/login')
+ 
+-  if (!user) {
+-    return (
+-      <div className="flex min-h-screen items-center justify-center bg-[#f7f8fc] p-6">
+-        <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+-          <h1 className="text-lg font-bold text-slate-900">Database is empty</h1>
+-          <p className="mt-2 text-sm text-slate-500">
+-            The tables exist but there are no users yet. Run <code className="rounded bg-slate-100 px-1.5 py-0.5">pnpm db:seed</code> to
+-            create demo users and tickets, then refresh.
+-          </p>
+-        </div>
+-      </div>
+-    )
+-  }
+-
+-  const [users, ticketCount] = await Promise.all([
+-    db.query.users.findMany({ orderBy: asc(schema.users.id), columns: { id: true, name: true, role: true, team: true } }),
+-    db.$count(schema.tickets, visibilityFilter(user)),
+-  ])
++  const ticketCount = await db.$count(schema.tickets, visibilityFilter(user))
+ 
+   return (
+-    <AppShell user={{ id: user.id, name: user.name, role: user.role, team: user.team }} users={users} ticketCount={ticketCount}>
++    <AppShell user={{ id: user.id, name: user.name, role: user.role, team: user.team }} ticketCount={ticketCount}>
+       {children}
+     </AppShell>
+   )
+diff --git a/app/(app)/my-requests/page.tsx b/app/(app)/my-requests/page.tsx
+index de66011..e71e582 100644
+--- a/app/(app)/my-requests/page.tsx
++++ b/app/(app)/my-requests/page.tsx
+@@ -4,7 +4,7 @@ import { getCurrentUser } from '@/lib/session'
+ 
+ export default async function MyRequestsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+   const user = await getCurrentUser()
+-  if (!user) redirect('/')
++  if (!user) redirect('/login')
+ 
+   return (
+     <>
+diff --git a/app/(app)/page.tsx b/app/(app)/page.tsx
+index 803cc52..bf449dc 100644
+--- a/app/(app)/page.tsx
++++ b/app/(app)/page.tsx
+@@ -8,7 +8,7 @@ import { formatDuration } from '@/lib/time'
+ 
+ export default async function OverviewPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+   const user = await getCurrentUser()
+-  if (!user) redirect('/')
++  if (!user) redirect('/login')
+   const [params, stats] = await Promise.all([searchParams, getStats(user)])
+   const agent = isAgentRole(user.role)
+ 
+diff --git a/app/(app)/people/page.tsx b/app/(app)/people/page.tsx
+index 0712442..d664a04 100644
+--- a/app/(app)/people/page.tsx
++++ b/app/(app)/people/page.tsx
+@@ -1,5 +1,6 @@
+ import { redirect } from 'next/navigation'
+ import { Avatar } from '@/components/avatar'
++import { AddPersonButton, PersonActions } from '@/components/people-admin'
+ import { isAgentRole } from '@/lib/constants'
+ import { listPeople } from '@/lib/queries'
+ import { getCurrentUser } from '@/lib/session'
+@@ -12,18 +13,22 @@ const roleStyles: Record<string, string> = {
+ 
+ export default async function PeoplePage() {
+   const user = await getCurrentUser()
+-  if (!user) redirect('/')
++  if (!user) redirect('/login')
+   if (!isAgentRole(user.role)) redirect('/')
+   const people = await listPeople()
++  const isAdmin = user.role === 'admin'
+ 
+   return (
+     <>
+-      <div className="mb-8">
+-        <h1 className="text-3xl font-bold tracking-tight text-slate-950">People</h1>
+-        <p className="mt-2 text-sm text-slate-500">Everyone who can raise or work on tickets.</p>
++      <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
++        <div>
++          <h1 className="text-3xl font-bold tracking-tight text-slate-950">People</h1>
++          <p className="mt-2 text-sm text-slate-500">Everyone who can raise or work on tickets.</p>
++        </div>
++        {isAdmin && <AddPersonButton />}
+       </div>
+       <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+-        <table className="w-full min-w-[640px] text-left">
++        <table className="w-full min-w-[760px] text-left">
+           <thead>
+             <tr className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+               <th className="px-6 py-4">Person</th>
+@@ -31,6 +36,7 @@ export default async function PeoplePage() {
+               <th className="px-4 py-4">Team</th>
+               <th className="px-4 py-4">Requested</th>
+               <th className="px-4 py-4">Assigned (active)</th>
++              {isAdmin && <th className="px-4 py-4">Manage</th>}
+             </tr>
+           </thead>
+           <tbody>
+@@ -49,6 +55,7 @@ export default async function PeoplePage() {
+                 <td className="px-4 py-4 text-xs text-slate-500">{p.team}</td>
+                 <td className="px-4 py-4 text-xs text-slate-500">{p.requested}</td>
+                 <td className="px-4 py-4 text-xs text-slate-500">{isAgentRole(p.role) ? p.assigned : '—'}</td>
++                {isAdmin && <td className="px-4 py-4"><PersonActions id={p.id} role={p.role} isSelf={p.id === user.id} /></td>}
+               </tr>
+             ))}
+           </tbody>
+diff --git a/app/(app)/tickets/[id]/page.tsx b/app/(app)/tickets/[id]/page.tsx
+index 5ab8c78..c85e382 100644
+--- a/app/(app)/tickets/[id]/page.tsx
++++ b/app/(app)/tickets/[id]/page.tsx
+@@ -11,7 +11,7 @@ import { timeAgo } from '@/lib/time'
+ 
+ export default async function TicketPage({ params }: { params: Promise<{ id: string }> }) {
+   const user = await getCurrentUser()
+-  if (!user) redirect('/')
++  if (!user) redirect('/login')
+   const id = Number((await params).id)
+   if (!Number.isInteger(id) || id <= 0) notFound()
+ 
+diff --git a/app/(app)/tickets/page.tsx b/app/(app)/tickets/page.tsx
+index c24f45a..d51db33 100644
+--- a/app/(app)/tickets/page.tsx
++++ b/app/(app)/tickets/page.tsx
+@@ -5,7 +5,7 @@ import { getCurrentUser } from '@/lib/session'
+ 
+ export default async function AllTicketsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+   const user = await getCurrentUser()
+-  if (!user) redirect('/')
++  if (!user) redirect('/login')
+   if (!isAgentRole(user.role)) redirect('/my-requests')
+ 
+   return (
+diff --git a/app/(auth)/login/page.tsx b/app/(auth)/login/page.tsx
+new file mode 100644
+index 0000000..ef6ca90
+--- /dev/null
++++ b/app/(auth)/login/page.tsx
+@@ -0,0 +1,20 @@
++import { LifeBuoy } from 'lucide-react'
++import { redirect } from 'next/navigation'
++import { AuthForm } from '@/components/auth-form'
++import { getCurrentUser } from '@/lib/session'
++import { isSignupOpen } from '@/lib/users'
++
++export const metadata = { title: 'Sign in · RelayDesk' }
++
++export default async function LoginPage() {
++  if (await getCurrentUser()) redirect('/')
++  return (
++    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-[#f7f8fc] p-6">
++      <div className="flex items-center gap-3">
++        <div className="flex size-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm"><LifeBuoy className="size-5" /></div>
++        <span className="text-lg font-semibold tracking-tight">RelayDesk</span>
++      </div>
++      <AuthForm mode="login" signupOpen={await isSignupOpen()} />
++    </main>
++  )
++}
+diff --git a/app/(auth)/signup/page.tsx b/app/(auth)/signup/page.tsx
+new file mode 100644
+index 0000000..885ba2f
+--- /dev/null
++++ b/app/(auth)/signup/page.tsx
+@@ -0,0 +1,30 @@
++import { LifeBuoy } from 'lucide-react'
++import Link from 'next/link'
++import { redirect } from 'next/navigation'
++import { AuthForm } from '@/components/auth-form'
++import { db, schema } from '@/lib/db'
++import { getCurrentUser } from '@/lib/session'
++import { isSignupOpen } from '@/lib/users'
++
++export const metadata = { title: 'Create account · RelayDesk' }
++
++export default async function SignupPage() {
++  if (await getCurrentUser()) redirect('/')
++  const [open, accounts] = await Promise.all([isSignupOpen(), db.$count(schema.credentials)])
++  return (
++    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-[#f7f8fc] p-6">
++      <div className="flex items-center gap-3">
++        <div className="flex size-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm"><LifeBuoy className="size-5" /></div>
++        <span className="text-lg font-semibold tracking-tight">RelayDesk</span>
++      </div>
++      {open ? (
++        <AuthForm mode="signup" signupOpen firstUser={accounts === 0} />
++      ) : (
++        <div className="max-w-sm rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
++          <h1 className="text-lg font-bold text-slate-950">Sign-up is closed</h1>
++          <p className="mt-2 text-sm text-slate-500">Ask an admin to create an account for you, then <Link href="/login" className="font-semibold text-indigo-600">sign in</Link>.</p>
++        </div>
++      )}
++    </main>
++  )
++}
+diff --git a/app/api/auth/login/route.ts b/app/api/auth/login/route.ts
+new file mode 100644
+index 0000000..1a44071
+--- /dev/null
++++ b/app/api/auth/login/route.ts
+@@ -0,0 +1,29 @@
++import { eq } from 'drizzle-orm'
++import { NextResponse } from 'next/server'
++import { handleError, parseBody } from '@/lib/api'
++import { db, schema } from '@/lib/db'
++import { HttpError } from '@/lib/mutations'
++import { dummyHash, verifyPassword } from '@/lib/password'
++import { createSession } from '@/lib/session'
++import { loginSchema } from '@/lib/validation'
++
++export async function POST(req: Request) {
++  try {
++    const { email, password } = await parseBody(req, loginSchema)
++    const [row] = await db
++      .select({ user: schema.users, hash: schema.credentials.passwordHash })
++      .from(schema.users)
++      .innerJoin(schema.credentials, eq(schema.credentials.userId, schema.users.id))
++      .where(eq(schema.users.email, email))
++      .limit(1)
++
++    // Always run one verification so response time doesn't reveal whether the email exists.
++    const ok = await verifyPassword(password, row?.hash ?? (await dummyHash()))
++    if (!row || !ok) throw new HttpError(401, 'Incorrect email or password.')
++
++    await createSession(row.user.id)
++    return NextResponse.json({ user: row.user })
++  } catch (e) {
++    return handleError(e)
++  }
++}
+diff --git a/app/api/auth/logout/route.ts b/app/api/auth/logout/route.ts
+new file mode 100644
+index 0000000..a63e667
+--- /dev/null
++++ b/app/api/auth/logout/route.ts
+@@ -0,0 +1,12 @@
++import { NextResponse } from 'next/server'
++import { handleError } from '@/lib/api'
++import { destroySession } from '@/lib/session'
++
++export async function POST() {
++  try {
++    await destroySession()
++    return NextResponse.json({ ok: true })
++  } catch (e) {
++    return handleError(e)
++  }
++}
+diff --git a/app/api/auth/signup/route.ts b/app/api/auth/signup/route.ts
+new file mode 100644
+index 0000000..89e17d5
+--- /dev/null
++++ b/app/api/auth/signup/route.ts
+@@ -0,0 +1,15 @@
++import { NextResponse } from 'next/server'
++import { handleError, parseBody } from '@/lib/api'
++import { createSession } from '@/lib/session'
++import { registerUser } from '@/lib/users'
++import { signupSchema } from '@/lib/validation'
++
++export async function POST(req: Request) {
++  try {
++    const user = await registerUser(await parseBody(req, signupSchema))
++    await createSession(user.id)
++    return NextResponse.json({ user }, { status: 201 })
++  } catch (e) {
++    return handleError(e)
++  }
++}
+diff --git a/app/api/session/route.ts b/app/api/session/route.ts
+deleted file mode 100644
+index 8fdfffa..0000000
+--- a/app/api/session/route.ts
++++ /dev/null
+@@ -1,21 +0,0 @@
+-import { eq } from 'drizzle-orm'
+-import { NextResponse } from 'next/server'
+-import { z } from 'zod'
+-import { handleError, parseBody } from '@/lib/api'
+-import { db, schema } from '@/lib/db'
+-import { HttpError } from '@/lib/mutations'
+-import { SESSION_COOKIE } from '@/lib/session'
+-
+-// DEMO AUTH: switch the active user. Remove this route when real auth is added.
+-export async function POST(req: Request) {
+-  try {
+-    const { userId } = await parseBody(req, z.object({ userId: z.number().int().positive() }))
+-    const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId) })
+-    if (!user) throw new HttpError(404, 'User not found.')
+-    const res = NextResponse.json({ user })
+-    res.cookies.set(SESSION_COOKIE, String(user.id), { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 60 * 60 * 24 * 30 })
+-    return res
+-  } catch (e) {
+-    return handleError(e)
+-  }
+-}
+diff --git a/app/api/users/[id]/route.ts b/app/api/users/[id]/route.ts
+new file mode 100644
+index 0000000..0d0f1a8
+--- /dev/null
++++ b/app/api/users/[id]/route.ts
+@@ -0,0 +1,15 @@
++import { NextResponse } from 'next/server'
++import { handleError, parseBody, parseId, requireAdmin } from '@/lib/api'
++import { adminUpdateUser } from '@/lib/users'
++import { adminUpdateUserSchema } from '@/lib/validation'
++
++export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
++  try {
++    const admin = await requireAdmin()
++    const id = parseId((await params).id)
++    await adminUpdateUser(admin.id, id, await parseBody(req, adminUpdateUserSchema))
++    return NextResponse.json({ ok: true })
++  } catch (e) {
++    return handleError(e)
++  }
++}
+diff --git a/app/api/users/route.ts b/app/api/users/route.ts
+new file mode 100644
+index 0000000..13e0ae2
+--- /dev/null
++++ b/app/api/users/route.ts
+@@ -0,0 +1,14 @@
++import { NextResponse } from 'next/server'
++import { handleError, parseBody, requireAdmin } from '@/lib/api'
++import { adminCreateUser } from '@/lib/users'
++import { adminCreateUserSchema } from '@/lib/validation'
++
++export async function POST(req: Request) {
++  try {
++    await requireAdmin()
++    const user = await adminCreateUser(await parseBody(req, adminCreateUserSchema))
++    return NextResponse.json({ user }, { status: 201 })
++  } catch (e) {
++    return handleError(e)
++  }
++}
+diff --git a/components/app-shell.tsx b/components/app-shell.tsx
+index 50a512d..140cd8e 100644
+--- a/components/app-shell.tsx
++++ b/components/app-shell.tsx
+@@ -3,7 +3,7 @@
+ import Link from 'next/link'
+ import { usePathname, useRouter } from 'next/navigation'
+ import { useEffect, useState, useTransition } from 'react'
+-import { ChevronDown, LayoutDashboard, LifeBuoy, Menu, MessageSquare, Plus, Ticket, Users, X } from 'lucide-react'
++import { LayoutDashboard, LifeBuoy, LogOut, Menu, MessageSquare, Plus, Ticket, Users, X } from 'lucide-react'
+ import { NewRequestDialog } from '@/components/new-request-dialog'
+ import { api } from '@/lib/client'
+ import { avatarColors } from '@/lib/constants'
+@@ -16,12 +16,10 @@ const roleLabel: Record<string, string> = { employee: 'Employee', agent: 'Suppor
+ 
+ export function AppShell({
+   user,
+-  users,
+   ticketCount,
+   children,
+ }: {
+   user: ShellUser
+-  users: ShellUser[]
+   ticketCount: number
+   children: React.ReactNode
+ }) {
+@@ -36,7 +34,7 @@ export function AppShell({
+   }, [])
+   useEffect(() => setMenuOpen(false), [pathname])
+ 
+-  const sidebar = <SidebarContent user={user} users={users} ticketCount={ticketCount} pathname={pathname} />
++  const sidebar = <SidebarContent user={user} ticketCount={ticketCount} pathname={pathname} />
+ 
+   return (
+     <div className="min-h-screen bg-[#f7f8fc] text-slate-900">
+@@ -83,15 +81,15 @@ function NavLink({ href, icon, children, badge, pathname }: { href: string; icon
+   )
+ }
+ 
+-function SidebarContent({ user, users, ticketCount, pathname }: { user: ShellUser; users: ShellUser[]; ticketCount: number; pathname: string }) {
++function SidebarContent({ user, ticketCount, pathname }: { user: ShellUser; ticketCount: number; pathname: string }) {
+   const router = useRouter()
+   const [pending, startTransition] = useTransition()
+   const isAgent = user.role !== 'employee'
+ 
+-  function switchUser(id: number) {
++  function signOut() {
+     startTransition(async () => {
+-      await api('/api/session', 'POST', { userId: id })
+-      router.push('/')
++      await api('/api/auth/logout', 'POST', {})
++      router.push('/login')
+       router.refresh()
+     })
+   }
+@@ -124,13 +122,9 @@ function SidebarContent({ user, users, ticketCount, pathname }: { user: ShellUse
+             <p className="text-xs text-slate-400">{roleLabel[user.role] ?? user.role}</p>
+           </div>
+         </div>
+-        <label className="mt-3 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400" htmlFor="switch-user">Demo: switch user</label>
+-        <div className="relative mt-1.5">
+-          <select id="switch-user" value={user.id} disabled={pending} onChange={(e) => switchUser(Number(e.target.value))} className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 pl-3 pr-8 text-xs outline-none ring-indigo-500 focus:ring-2 disabled:opacity-60">
+-            {users.map((u) => <option key={u.id} value={u.id}>{u.name} · {roleLabel[u.role] ?? u.role}</option>)}
+-          </select>
+-          <ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-slate-400" />
+-        </div>
++        <button onClick={signOut} disabled={pending} className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60">
++          <LogOut className="size-4" /> {pending ? 'Signing out…' : 'Sign out'}
++        </button>
+       </div>
+     </>
+   )
+diff --git a/components/auth-form.tsx b/components/auth-form.tsx
+new file mode 100644
+index 0000000..b4f9cfd
+--- /dev/null
++++ b/components/auth-form.tsx
+@@ -0,0 +1,88 @@
++'use client'
++
++import Link from 'next/link'
++import { useRouter } from 'next/navigation'
++import { useState } from 'react'
++import { api } from '@/lib/client'
++import { TEAMS } from '@/lib/constants'
++
++const input =
++  'mt-1.5 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-indigo-500 focus:ring-2'
++const label = 'text-xs font-semibold text-slate-700'
++
++export function AuthForm({ mode, signupOpen, firstUser }: { mode: 'login' | 'signup'; signupOpen: boolean; firstUser?: boolean }) {
++  const router = useRouter()
++  const [name, setName] = useState('')
++  const [email, setEmail] = useState('')
++  const [password, setPassword] = useState('')
++  const [team, setTeam] = useState('Operations')
++  const [error, setError] = useState('')
++  const [busy, setBusy] = useState(false)
++  const signup = mode === 'signup'
++
++  async function submit(e: React.FormEvent) {
++    e.preventDefault()
++    setError('')
++    setBusy(true)
++    try {
++      await api(signup ? '/api/auth/signup' : '/api/auth/login', 'POST', signup ? { name, email, password, team } : { email, password })
++      router.push('/')
++      router.refresh()
++    } catch (err) {
++      setError(err instanceof Error ? err.message : 'Something went wrong.')
++      setBusy(false)
++    }
++  }
++
++  return (
++    <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
++      <h1 className="text-xl font-bold tracking-tight text-slate-950">{signup ? 'Create your account' : 'Sign in'}</h1>
++      <p className="mt-1 text-sm text-slate-500">
++        {signup
++          ? firstUser
++            ? 'You are the first user, so this account will be the admin.'
++            : 'Use your work email.'
++          : 'Welcome back to RelayDesk.'}
++      </p>
++
++      {signup && (
++        <>
++          <label className={`${label} mt-5 block`} htmlFor="name">Full name</label>
++          <input id="name" required autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} className={input} />
++        </>
++      )}
++
++      <label className={`${label} mt-4 block`} htmlFor="email">Email</label>
++      <input id="email" type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={input} />
++
++      <label className={`${label} mt-4 block`} htmlFor="password">Password</label>
++      <input id="password" type="password" required minLength={signup ? 8 : 1} autoComplete={signup ? 'new-password' : 'current-password'} value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
++      {signup && <p className="mt-1 text-xs text-slate-400">At least 8 characters.</p>}
++
++      {signup && (
++        <>
++          <label className={`${label} mt-4 block`} htmlFor="team">Your team</label>
++          <select id="team" value={team} onChange={(e) => setTeam(e.target.value)} className={input}>
++            {TEAMS.map((t) => <option key={t}>{t}</option>)}
++          </select>
++        </>
++      )}
++
++      {error && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700" role="alert">{error}</p>}
++
++      <button type="submit" disabled={busy} className="mt-6 h-10 w-full rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
++        {busy ? 'Please wait…' : signup ? 'Create account' : 'Sign in'}
++      </button>
++
++      <p className="mt-5 text-center text-xs text-slate-500">
++        {signup ? (
++          <>Already have an account? <Link href="/login" className="font-semibold text-indigo-600">Sign in</Link></>
++        ) : signupOpen ? (
++          <>New here? <Link href="/signup" className="font-semibold text-indigo-600">Create an account</Link></>
++        ) : (
++          'Need an account? Ask an admin to create one for you.'
++        )}
++      </p>
++    </form>
++  )
++}
+diff --git a/components/people-admin.tsx b/components/people-admin.tsx
+new file mode 100644
+index 0000000..9821d22
+--- /dev/null
++++ b/components/people-admin.tsx
+@@ -0,0 +1,165 @@
++'use client'
++
++import { useRouter } from 'next/navigation'
++import { useState, useTransition } from 'react'
++import { UserPlus, X } from 'lucide-react'
++import { api } from '@/lib/client'
++import { ROLES, TEAMS } from '@/lib/constants'
++
++const field = 'mt-1.5 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-indigo-500 focus:ring-2'
++const label = 'text-xs font-semibold text-slate-700'
++
++/** Readable temporary password, no look-alike characters (0/O, 1/l/I). */
++function generatePassword() {
++  const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
++  const bytes = crypto.getRandomValues(new Uint8Array(12))
++  return Array.from(bytes, (b) => chars[b % chars.length]).join('')
++}
++
++export function AddPersonButton() {
++  const router = useRouter()
++  const [open, setOpen] = useState(false)
++  const [form, setForm] = useState({ name: '', email: '', team: 'Operations', role: 'employee', password: '' })
++  const [error, setError] = useState('')
++  const [created, setCreated] = useState<{ email: string; password: string } | null>(null)
++  const [busy, setBusy] = useState(false)
++
++  function reset() {
++    setOpen(false)
++    setCreated(null)
++    setError('')
++    setForm({ name: '', email: '', team: 'Operations', role: 'employee', password: '' })
++  }
++
++  async function submit(e: React.FormEvent) {
++    e.preventDefault()
++    setBusy(true)
++    setError('')
++    try {
++      await api('/api/users', 'POST', form)
++      setCreated({ email: form.email, password: form.password })
++      router.refresh()
++    } catch (err) {
++      setError(err instanceof Error ? err.message : 'Could not create user.')
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  return (
++    <>
++      <button onClick={() => { setForm((f) => ({ ...f, password: generatePassword() })); setOpen(true) }} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700">
++        <UserPlus className="size-4" /> Add person
++      </button>
++
++      {open && (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4" role="dialog" aria-modal="true">
++          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
++            <div className="mb-5 flex items-start justify-between">
++              <h2 className="text-lg font-bold">{created ? 'Account created' : 'Add a person'}</h2>
++              <button onClick={reset} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100" aria-label="Close"><X className="size-5" /></button>
++            </div>
++
++            {created ? (
++              <>
++                <p className="text-sm text-slate-600">Share these sign-in details with them. This password is shown only now.</p>
++                <dl className="mt-4 space-y-2 rounded-xl bg-slate-50 p-4 text-sm">
++                  <div><dt className="text-xs text-slate-400">Email</dt><dd className="font-mono">{created.email}</dd></div>
++                  <div><dt className="text-xs text-slate-400">Temporary password</dt><dd className="font-mono">{created.password}</dd></div>
++                </dl>
++                <button onClick={reset} className="mt-5 h-10 w-full rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700">Done</button>
++              </>
++            ) : (
++              <form onSubmit={submit}>
++                <label className={label} htmlFor="p-name">Full name</label>
++                <input id="p-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={field} />
++                <label className={`${label} mt-4 block`} htmlFor="p-email">Email</label>
++                <input id="p-email" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={field} />
++                <div className="mt-4 grid grid-cols-2 gap-3">
++                  <div>
++                    <label className={label} htmlFor="p-role">Role</label>
++                    <select id="p-role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className={`${field} capitalize`}>
++                      {ROLES.map((r) => <option key={r}>{r}</option>)}
++                    </select>
++                  </div>
++                  <div>
++                    <label className={label} htmlFor="p-team">Team</label>
++                    <select id="p-team" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })} className={field}>
++                      {TEAMS.map((t) => <option key={t}>{t}</option>)}
++                    </select>
++                  </div>
++                </div>
++                <label className={`${label} mt-4 block`} htmlFor="p-pass">Temporary password</label>
++                <div className="flex gap-2">
++                  <input id="p-pass" required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className={`${field} font-mono`} />
++                  <button type="button" onClick={() => setForm({ ...form, password: generatePassword() })} className="mt-1.5 shrink-0 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50">Generate</button>
++                </div>
++                {error && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700" role="alert">{error}</p>}
++                <button type="submit" disabled={busy} className="mt-6 h-10 w-full rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">{busy ? 'Creating…' : 'Create account'}</button>
++              </form>
++            )}
++          </div>
++        </div>
++      )}
++    </>
++  )
++}
++
++export function PersonActions({ id, role, isSelf }: { id: number; role: string; isSelf: boolean }) {
++  const router = useRouter()
++  const [value, setValue] = useState(role)
++  const [error, setError] = useState('')
++  const [resetting, setResetting] = useState(false)
++  const [newPassword, setNewPassword] = useState('')
++  const [done, setDone] = useState('')
++  const [pending, startTransition] = useTransition()
++
++  function changeRole(next: string) {
++    const prev = value
++    setValue(next)
++    setError('')
++    startTransition(async () => {
++      try {
++        await api(`/api/users/${id}`, 'PATCH', { role: next })
++        router.refresh()
++      } catch (e) {
++        setValue(prev)
++        setError(e instanceof Error ? e.message : 'Could not change role.')
++      }
++    })
++  }
++
++  function savePassword() {
++    setError('')
++    startTransition(async () => {
++      try {
++        await api(`/api/users/${id}`, 'PATCH', { password: newPassword })
++        setDone(newPassword)
++        setResetting(false)
++        setNewPassword('')
++      } catch (e) {
++        setError(e instanceof Error ? e.message : 'Could not reset password.')
++      }
++    })
++  }
++
++  return (
++    <div className="flex flex-col items-start gap-1.5">
++      <div className="flex items-center gap-2">
++        <select aria-label="Role" value={value} disabled={isSelf || pending} title={isSelf ? 'You cannot change your own role' : undefined} onChange={(e) => changeRole(e.target.value)} className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs capitalize outline-none ring-indigo-500 focus:ring-2 disabled:opacity-60">
++          {ROLES.map((r) => <option key={r}>{r}</option>)}
++        </select>
++        {!resetting && <button onClick={() => { setDone(''); setNewPassword(generatePassword()); setResetting(true) }} className="text-xs font-semibold text-indigo-600 hover:text-indigo-700">Reset password</button>}
++      </div>
++      {resetting && (
++        <div className="flex items-center gap-2">
++          <input aria-label="New password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="h-8 w-36 rounded-lg border border-slate-200 px-2 font-mono text-xs outline-none ring-indigo-500 focus:ring-2" />
++          <button onClick={savePassword} disabled={pending || newPassword.length < 8} className="text-xs font-semibold text-indigo-600 disabled:opacity-50">Save</button>
++          <button onClick={() => setResetting(false)} className="text-xs text-slate-400">Cancel</button>
++        </div>
++      )}
++      {done && <p className="text-xs text-emerald-700">Password set to <span className="font-mono">{done}</span>. Share it with them.</p>}
++      {error && <p className="text-xs text-rose-700" role="alert">{error}</p>}
++    </div>
++  )
++}
+diff --git a/lib/api.ts b/lib/api.ts
+index 6f50115..991aa13 100644
+--- a/lib/api.ts
++++ b/lib/api.ts
+@@ -5,7 +5,13 @@ import { HttpError } from '@/lib/mutations'
+ 
+ export async function requireUser() {
+   const user = await getCurrentUser()
+-  if (!user) throw new HttpError(401, 'No user found. Run `pnpm db:seed` to create demo users.')
++  if (!user) throw new HttpError(401, 'Please sign in.')
++  return user
++}
++
++export async function requireAdmin() {
++  const user = await requireUser()
++  if (user.role !== 'admin') throw new HttpError(403, 'Only admins can do this.')
+   return user
+ }
+ 
+diff --git a/lib/db/schema.ts b/lib/db/schema.ts
+index c51424c..d6ad488 100644
+--- a/lib/db/schema.ts
++++ b/lib/db/schema.ts
+@@ -11,6 +11,31 @@ export const users = pgTable('users', {
+   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+ })
+ 
++// Password hashes live in their own table so they can never be returned by a
++// query that loads a user (for example a ticket's requester).
++export const credentials = pgTable('credentials', {
++  userId: integer()
++    .primaryKey()
++    .references(() => users.id, { onDelete: 'cascade' }),
++  passwordHash: text().notNull(),
++  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
++})
++
++export const sessions = pgTable(
++  'sessions',
++  {
++    id: integer().primaryKey().generatedAlwaysAsIdentity(),
++    // Only a SHA-256 of the cookie token is stored, so a DB leak cannot be replayed as logins.
++    tokenHash: text().notNull().unique(),
++    userId: integer()
++      .notNull()
++      .references(() => users.id, { onDelete: 'cascade' }),
++    expiresAt: timestamp({ withTimezone: true }).notNull(),
++    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
++  },
++  (t) => [index('sessions_user_idx').on(t.userId)],
++)
++
+ export const tickets = pgTable(
+   'tickets',
+   {
+diff --git a/lib/password.ts b/lib/password.ts
+new file mode 100644
+index 0000000..2656842
+--- /dev/null
++++ b/lib/password.ts
+@@ -0,0 +1,26 @@
++import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto'
++
++// scrypt ships with Node, so there is no native dependency to break on Vercel.
++function scrypt(password: string, salt: Buffer, keylen: number) {
++  return new Promise<Buffer>((resolve, reject) =>
++    scryptCb(password, salt, keylen, (err, key) => (err ? reject(err) : resolve(key))),
++  )
++}
++
++export async function hashPassword(password: string) {
++  const salt = randomBytes(16)
++  const key = await scrypt(password, salt, 64)
++  return `scrypt$${salt.toString('base64')}$${key.toString('base64')}`
++}
++
++export async function verifyPassword(password: string, stored: string) {
++  const [alg, salt, key] = stored.split('$')
++  if (alg !== 'scrypt' || !salt || !key) return false
++  const expected = Buffer.from(key, 'base64')
++  const actual = await scrypt(password, Buffer.from(salt, 'base64'), expected.length)
++  return actual.length === expected.length && timingSafeEqual(actual, expected)
++}
++
++let dummy: Promise<string> | undefined
++/** Verified against when the email is unknown, so login timing doesn't reveal which emails exist. */
++export const dummyHash = () => (dummy ??= hashPassword('not-a-real-password'))
+diff --git a/lib/session.ts b/lib/session.ts
+index 672192a..70de2b1 100644
+--- a/lib/session.ts
++++ b/lib/session.ts
+@@ -1,27 +1,42 @@
+-import { eq, asc } from 'drizzle-orm'
++import { and, eq, gt } from 'drizzle-orm'
++import { createHash, randomBytes } from 'node:crypto'
+ import { cookies } from 'next/headers'
+ import { cache } from 'react'
+ import { db, schema } from '@/lib/db'
+ 
+-export const SESSION_COOKIE = 'relay_uid'
++export const SESSION_COOKIE = 'relay_session'
++const SESSION_DAYS = 30
++const sha256 = (v: string) => createHash('sha256').update(v).digest('hex')
+ 
+-/**
+- * DEMO AUTH: the "logged in" user is whichever user id is stored in a cookie
+- * (switch with the user menu in the sidebar). Replace this one function with a
+- * real auth provider (Auth.js, Clerk, Supabase Auth...) and the rest of the app
+- * keeps working, since everything calls getCurrentUser().
+- */
+-export const getCurrentUser = cache(async () => {
+-  const jar = await cookies()
+-  const id = Number(jar.get(SESSION_COOKIE)?.value)
+-  if (Number.isInteger(id) && id > 0) {
+-    const user = await db.query.users.findFirst({ where: eq(schema.users.id, id) })
+-    if (user) return user
+-  }
+-  // Default to the first employee so the app opens straight into a usable state.
+-  const fallback = await db.query.users.findFirst({
+-    where: eq(schema.users.role, 'employee'),
+-    orderBy: asc(schema.users.id),
++export async function createSession(userId: number) {
++  const token = randomBytes(32).toString('base64url')
++  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 3600 * 1000)
++  await db.insert(schema.sessions).values({ tokenHash: sha256(token), userId, expiresAt })
++  ;(await cookies()).set(SESSION_COOKIE, token, {
++    httpOnly: true,
++    sameSite: 'lax',
++    secure: process.env.NODE_ENV === 'production',
++    path: '/',
++    expires: expiresAt,
+   })
+-  return fallback ?? null
++}
++
++export async function destroySession() {
++  const jar = await cookies()
++  const token = jar.get(SESSION_COOKIE)?.value
++  if (token) await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, sha256(token)))
++  jar.delete(SESSION_COOKIE)
++}
++
++/** The signed-in user, or null. Everything in the app goes through this one function. */
++export const getCurrentUser = cache(async () => {
++  const token = (await cookies()).get(SESSION_COOKIE)?.value
++  if (!token) return null
++  const [row] = await db
++    .select({ user: schema.users })
++    .from(schema.sessions)
++    .innerJoin(schema.users, eq(schema.users.id, schema.sessions.userId))
++    .where(and(eq(schema.sessions.tokenHash, sha256(token)), gt(schema.sessions.expiresAt, new Date())))
++    .limit(1)
++  return row?.user ?? null
+ })
+diff --git a/lib/users.ts b/lib/users.ts
+new file mode 100644
+index 0000000..c810a5e
+--- /dev/null
++++ b/lib/users.ts
+@@ -0,0 +1,75 @@
++import { eq, sql } from 'drizzle-orm'
++import { db, schema } from '@/lib/db'
++import type { Role, Team } from '@/lib/constants'
++import { HttpError } from '@/lib/mutations'
++import { hashPassword } from '@/lib/password'
++
++const { users, credentials, sessions } = schema
++
++/** Set ALLOW_SIGNUP=false to close public sign-up once your team has accounts. */
++const signupEnabled = () => process.env.ALLOW_SIGNUP !== 'false'
++
++/** Sign-up is always open for the very first account, which becomes the admin. */
++export async function isSignupOpen() {
++  const accounts = await db.$count(credentials)
++  return accounts === 0 || signupEnabled()
++}
++
++export async function registerUser(input: { name: string; email: string; password: string; team: Team }) {
++  const passwordHash = await hashPassword(input.password)
++  return db.transaction(async (tx) => {
++    // Serialise sign-ups so two people racing can't both become the first admin.
++    await tx.execute(sql`select pg_advisory_xact_lock(7001)`)
++    const first = (await tx.$count(credentials)) === 0
++    if (!first && !signupEnabled()) throw new HttpError(403, 'Sign-up is closed. Ask an admin to create your account.')
++
++    const taken = await tx.query.users.findFirst({ where: eq(users.email, input.email) })
++    if (taken) throw new HttpError(409, 'An account with this email already exists.')
++
++    const [user] = await tx
++      .insert(users)
++      .values({ name: input.name, email: input.email, team: input.team, role: first ? 'admin' : 'employee' })
++      .returning()
++    await tx.insert(credentials).values({ userId: user.id, passwordHash })
++    return user
++  })
++}
++
++export async function adminCreateUser(input: { name: string; email: string; password: string; team: Team; role: Role }) {
++  const passwordHash = await hashPassword(input.password)
++  return db.transaction(async (tx) => {
++    const taken = await tx.query.users.findFirst({ where: eq(users.email, input.email) })
++    if (taken) throw new HttpError(409, 'An account with this email already exists.')
++    const [user] = await tx
++      .insert(users)
++      .values({ name: input.name, email: input.email, team: input.team, role: input.role })
++      .returning()
++    await tx.insert(credentials).values({ userId: user.id, passwordHash })
++    return user
++  })
++}
++
++export async function adminUpdateUser(
++  actorId: number,
++  targetId: number,
++  patch: { role?: Role; team?: Team; password?: string },
++) {
++  const target = await db.query.users.findFirst({ where: eq(users.id, targetId) })
++  if (!target) throw new HttpError(404, 'User not found.')
++  if (patch.role && targetId === actorId && patch.role !== target.role) {
++    throw new HttpError(400, 'You cannot change your own role. Ask another admin.')
++  }
++
++  const { password, ...profile } = patch
++  if (Object.keys(profile).length > 0) await db.update(users).set(profile).where(eq(users.id, targetId))
++
++  if (password) {
++    const passwordHash = await hashPassword(password)
++    await db
++      .insert(credentials)
++      .values({ userId: targetId, passwordHash })
++      .onConflictDoUpdate({ target: credentials.userId, set: { passwordHash, updatedAt: new Date() } })
++    // A reset signs that person out everywhere (but keeps the admin who did it signed in).
++    if (targetId !== actorId) await db.delete(sessions).where(eq(sessions.userId, targetId))
++  }
++}
+diff --git a/lib/validation.ts b/lib/validation.ts
+index e3989a1..a949955 100644
+--- a/lib/validation.ts
++++ b/lib/validation.ts
+@@ -1,5 +1,5 @@
+ import { z } from 'zod'
+-import { PRIORITIES, STATUSES, TEAMS } from '@/lib/constants'
++import { PRIORITIES, ROLES, STATUSES, TEAMS } from '@/lib/constants'
+ 
+ export const createTicketSchema = z.object({
+   title: z.string().trim().min(3, 'Please describe the problem in a few words.').max(160),
+@@ -21,3 +21,21 @@ export const updateTicketSchema = z
+ export const commentSchema = z.object({
+   body: z.string().trim().min(1, 'Comment cannot be empty.').max(5000),
+ })
++
++const email = z.string().trim().toLowerCase().email('Enter a valid email address.').max(254)
++const password = z.string().min(8, 'Password must be at least 8 characters.').max(200)
++const name = z.string().trim().min(2, 'Please enter your name.').max(80)
++
++export const signupSchema = z.object({ name, email, password, team: z.enum(TEAMS).default('Operations') })
++export const loginSchema = z.object({ email, password: z.string().min(1, 'Enter your password.').max(200) })
++export const adminCreateUserSchema = z.object({
++  name,
++  email,
++  password,
++  team: z.enum(TEAMS).default('Operations'),
++  role: z.enum(ROLES).default('employee'),
++})
++export const adminUpdateUserSchema = z
++  .object({ role: z.enum(ROLES), team: z.enum(TEAMS), password })
++  .partial()
++  .refine((v) => Object.keys(v).length > 0, 'Nothing to update.')
+diff --git a/package.json b/package.json
+index 8856701..bfebef1 100644
+--- a/package.json
++++ b/package.json
+@@ -9,9 +9,8 @@
+     "start": "next start",
+     "lint": "tsc --noEmit",
+     "db:push": "drizzle-kit push",
+-    "db:seed": "tsx scripts/seed.ts",
+-    "db:reset": "tsx scripts/seed.ts --force",
+-    "db:studio": "drizzle-kit studio"
++    "db:studio": "drizzle-kit studio",
++    "db:wipe": "tsx scripts/wipe.ts"
+   },
+   "dependencies": {
+     "@base-ui/react": "^1.5.0",
+diff --git a/scripts/seed.ts b/scripts/seed.ts
+deleted file mode 100644
+index 67e1245..0000000
+--- a/scripts/seed.ts
++++ /dev/null
+@@ -1,72 +0,0 @@
+-import './load-env' // must stay first so DATABASE_URL is set before the db client loads
+-import { sql } from 'drizzle-orm'
+-import { db, schema } from '../lib/db'
+-import type { Priority, Status } from '../lib/constants'
+-
+-const { users, tickets, comments } = schema
+-const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000)
+-
+-async function main() {
+-  const count = await db.$count(users)
+-  if (count > 0 && !process.argv.includes('--force')) {
+-    console.log('Database already has users. Use --force to wipe and reseed.')
+-    process.exit(0)
+-  }
+-
+-  // Wipe everything and reset ID counters so tickets start again at REQ-1001
+-  await db.execute(sql`truncate table comments, tickets, users restart identity cascade`)
+-
+-  const inserted = await db
+-    .insert(users)
+-    .values([
+-      { name: 'Alex Roberts', email: 'alex@relaydesk.test', role: 'employee', team: 'Operations' },
+-      { name: 'Priya Shah', email: 'priya@relaydesk.test', role: 'employee', team: 'Operations' },
+-      { name: 'Daniel Kim', email: 'daniel@relaydesk.test', role: 'employee', team: 'Fleet' },
+-      { name: 'Amelia Fox', email: 'amelia@relaydesk.test', role: 'employee', team: 'Dispatch' },
+-      { name: 'Marcus Lee', email: 'marcus@relaydesk.test', role: 'employee', team: 'Finance' },
+-      { name: 'Sofia Martinez', email: 'sofia@relaydesk.test', role: 'employee', team: 'Customer Care' },
+-      { name: 'Jordan Blake', email: 'jordan@relaydesk.test', role: 'agent', team: 'IT' },
+-      { name: 'Taylor Nguyen', email: 'taylor@relaydesk.test', role: 'admin', team: 'IT' },
+-    ])
+-    .returning()
+-  const u = Object.fromEntries(inserted.map((x) => [x.name.split(' ')[0], x]))
+-
+-  const seedTickets: Array<{
+-    title: string; description: string; requester: string; assignee?: string
+-    team: string; priority: Priority; status: Status; created: number
+-  }> = [
+-    { title: 'Email delivery delayed for customer notifications', description: 'Order confirmation emails are arriving 30+ minutes late.', requester: 'Sofia', assignee: 'Taylor', team: 'Customer Care', priority: 'High', status: 'Resolved', created: 60 * 30 },
+-    { title: 'Request access to shipment reporting dashboard', description: 'Need read access for month-end reconciliation.', requester: 'Marcus', assignee: 'Jordan', team: 'Finance', priority: 'Medium', status: 'Waiting', created: 60 * 5 },
+-    { title: 'Printer not responding in dispatch office', description: 'Label printer shows offline since this morning.', requester: 'Amelia', team: 'Dispatch', priority: 'Low', status: 'Open', created: 60 * 2 },
+-    { title: 'Add new driver to route planning tool', description: 'New hire starting Monday, needs an account and route access.', requester: 'Daniel', team: 'Fleet', priority: 'Medium', status: 'Open', created: 90 },
+-    { title: 'Laptop cannot connect to warehouse Wi-Fi', description: 'Connects fine elsewhere but drops on the warehouse floor.', requester: 'Priya', assignee: 'Jordan', team: 'Operations', priority: 'High', status: 'In progress', created: 45 },
+-    { title: 'Request second monitor for planning desk', description: 'Route planning is much slower on a single screen.', requester: 'Alex', assignee: 'Jordan', team: 'Operations', priority: 'Low', status: 'In progress', created: 60 * 26 },
+-    { title: 'Cannot log in to shipment tracking portal', description: 'Password reset email never arrives.', requester: 'Alex', team: 'Operations', priority: 'Medium', status: 'Open', created: 20 },
+-  ]
+-
+-  for (const t of seedTickets) {
+-    const createdAt = ago(t.created)
+-    const [row] = await db
+-      .insert(tickets)
+-      .values({
+-        title: t.title, description: t.description, team: t.team,
+-        priority: t.priority, status: t.status,
+-        requesterId: u[t.requester].id, assigneeId: t.assignee ? u[t.assignee].id : null,
+-        createdAt, updatedAt: ago(Math.max(5, t.created / 3)),
+-        resolvedAt: t.status === 'Resolved' ? ago(t.created / 2) : null,
+-      })
+-      .returning()
+-
+-    if (t.assignee) {
+-      await db.insert(comments).values([
+-        { ticketId: row.id, authorId: u[t.assignee].id, body: 'Thanks for reporting this. I am looking into it now.', createdAt: new Date(createdAt.getTime() + 18 * 60_000) },
+-        { ticketId: row.id, authorId: u[t.requester].id, body: 'Appreciate it. Let me know if you need anything from me.', createdAt: new Date(createdAt.getTime() + 25 * 60_000) },
+-      ])
+-    }
+-  }
+-
+-  console.log(`Seeded ${inserted.length} users and ${seedTickets.length} tickets.`)
+-  process.exit(0)
+-}
+-
+-main().catch((e) => { console.error(e); process.exit(1) })
+diff --git a/scripts/wipe.ts b/scripts/wipe.ts
+new file mode 100644
+index 0000000..93301b1
+--- /dev/null
++++ b/scripts/wipe.ts
+@@ -0,0 +1,17 @@
++import './load-env' // must stay first so DATABASE_URL is set before the db client loads
++import { sql } from 'drizzle-orm'
++import { db } from '../lib/db'
++
++async function main() {
++  const host = new URL(process.env.DATABASE_URL!).host
++  if (!process.argv.includes('--yes')) {
++    console.log(`This DELETES ALL users, tickets and comments in the database at:\n  ${host}\n`)
++    console.log('Re-run with --yes to confirm:  pnpm db:wipe --yes')
++    process.exit(1)
++  }
++  await db.execute(sql`truncate table comments, tickets, sessions, credentials, users restart identity cascade`)
++  console.log(`Wiped ${host}. The next person to sign up becomes the admin.`)
++  process.exit(0)
++}
++
++main().catch((e) => { console.error(e); process.exit(1) })

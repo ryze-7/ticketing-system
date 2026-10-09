@@ -54,7 +54,7 @@ export function NewRequestDialog({ defaultTeam, onClose }: { defaultTeam: string
       <form onSubmit={submit} className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
         <div className="mb-5 flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-bold">Create a new request</h2>
+            <h2 className="text-lg font-bold">Create a new ticket</h2>
             <p className="mt-1 text-sm text-slate-500">Tell the IT team what you need help with.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100" aria-label="Close">
@@ -88,7 +88,7 @@ export function NewRequestDialog({ defaultTeam, onClose }: { defaultTeam: string
         <div className="mt-6 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-50">Cancel</button>
           <button type="submit" disabled={submitting} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
-            {submitting ? 'Submitting…' : 'Submit request'}
+            {submitting ? 'Submitting…' : 'Submit ticket'}
           </button>
         </div>
       </form>

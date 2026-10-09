@@ -11,7 +11,7 @@ import { timeAgo } from '@/lib/time'
 
 export default async function TicketPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser()
-  if (!user) redirect('/')
+  if (!user) redirect('/login')
   const id = Number((await params).id)
   if (!Number.isInteger(id) || id <= 0) notFound()
 

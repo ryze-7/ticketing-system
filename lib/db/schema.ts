@@ -11,6 +11,31 @@ export const users = pgTable('users', {
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 })
 
+// Password hashes live in their own table so they can never be returned by a
+// query that loads a user (for example a ticket's requester).
+export const credentials = pgTable('credentials', {
+  userId: integer()
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  passwordHash: text().notNull(),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+})
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    // Only a SHA-256 of the cookie token is stored, so a DB leak cannot be replayed as logins.
+    tokenHash: text().notNull().unique(),
+    userId: integer()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('sessions_user_idx').on(t.userId)],
+)
+
 export const tickets = pgTable(
   'tickets',
   {

@@ -4,7 +4,7 @@ import { getCurrentUser } from '@/lib/session'
 
 export default async function MyRequestsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const user = await getCurrentUser()
-  if (!user) redirect('/')
+  if (!user) redirect('/login')
 
   return (
     <>

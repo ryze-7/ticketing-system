@@ -9,9 +9,8 @@
     "start": "next start",
     "lint": "tsc --noEmit",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx scripts/seed.ts",
-    "db:reset": "tsx scripts/seed.ts --force",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:wipe": "tsx scripts/wipe.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
