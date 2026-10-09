@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:wipe": "tsx scripts/wipe.ts"
+    "db:wipe": "tsx scripts/wipe.ts",
+    "db:reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -41,4 +42,9 @@
     "tsx": "^4.23.15",
     "typescript": "5.7.3"
   }
+
+  
 }
+
+
+
