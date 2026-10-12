@@ -1,6 +1,6 @@
 export const STATUSES = ['Open', 'In progress', 'Waiting', 'Resolved'] as const
 export const PRIORITIES = ['Low', 'Medium', 'High'] as const
-export const TEAMS = ['Operations', 'Fleet', 'Dispatch', 'Finance', 'Customer Care', 'IT'] as const
+export const TEAMS = ['Operations', 'HR & Management', 'Sales', 'Finance', 'Coload Team', 'Quality Check', 'IT'] as const
 export const ROLES = ['employee', 'agent', 'admin'] as const
 
 export type Status = (typeof STATUSES)[number]
